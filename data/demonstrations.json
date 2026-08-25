@@ -1,0 +1,77 @@
+[
+  {
+    "task": "What is the population of London?",
+    "trace": "Thought: I need to look up the population of London.\nAction: search[population of London]\nObservation: The population of London is 9 million.\nThought: I now know the answer.\nFinal Answer: The population of London is 9 million.",
+    "n_actions": 1
+  },
+  {
+    "task": "What is the capital of Germany?",
+    "trace": "Thought: I need to find the capital of Germany.\nAction: search[capital of Germany]\nObservation: The capital of Germany is Berlin.\nThought: I now know the answer.\nFinal Answer: The capital of Germany is Berlin.",
+    "n_actions": 1
+  },
+  {
+    "task": "What is 125 multiplied by 8?",
+    "trace": "Thought: This is a math problem, I should use the calculator.\nAction: calculator[125 * 8]\nObservation: 1000\nThought: I now know the answer.\nFinal Answer: 125 multiplied by 8 is 1000.",
+    "n_actions": 1
+  },
+  {
+    "task": "What is 20 percent of 450?",
+    "trace": "Thought: I need to compute 20% of 450 using the calculator.\nAction: calculator[0.20 * 450]\nObservation: 90.0\nThought: I now know the answer.\nFinal Answer: 20 percent of 450 is 90.",
+    "n_actions": 1
+  },
+  {
+    "task": "What is triple the population of London in millions?",
+    "trace": "Thought: First I need the population of London, then I multiply it by 3.\nAction: search[population of London]\nObservation: The population of London is 9 million.\nThought: Now I multiply 9 by 3 using the calculator.\nAction: calculator[9 * 3]\nObservation: 27\nThought: I now know the answer.\nFinal Answer: Triple the population of London is 27 million.",
+    "n_actions": 2
+  },
+  {
+    "task": "Find the population of Mumbai and subtract 3 million from it.",
+    "trace": "Thought: First I search for Mumbai's population, then subtract 3 million.\nAction: search[population of Mumbai]\nObservation: The population of Mumbai is 21 million.\nThought: Now I subtract 3 from 21 using the calculator.\nAction: calculator[21 - 3]\nObservation: 18\nThought: I now know the answer.\nFinal Answer: The population of Mumbai minus 3 million is 18 million.",
+    "n_actions": 2
+  },
+  {
+    "task": "How many moons does Jupiter have, divided by 5?",
+    "trace": "Thought: First I need to find how many moons Jupiter has.\nAction: search[number of moons of Jupiter]\nObservation: Jupiter has 95 moons.\nThought: Now I divide 95 by 5.\nAction: calculator[95 / 5]\nObservation: 19.0\nThought: I now know the answer.\nFinal Answer: Jupiter's 95 moons divided by 5 is 19.",
+    "n_actions": 2
+  },
+  {
+    "task": "What is the population of London plus the population of Mumbai, in millions?",
+    "trace": "Thought: I need both populations. First, London.\nAction: search[population of London]\nObservation: The population of London is 9 million.\nThought: Next, Mumbai.\nAction: search[population of Mumbai]\nObservation: The population of Mumbai is 21 million.\nThought: Now I add 9 and 21.\nAction: calculator[9 + 21]\nObservation: 30\nThought: I now know the answer.\nFinal Answer: The combined population of London and Mumbai is 30 million.",
+    "n_actions": 3
+  },
+  {
+    "task": "Search for the depth of the Mariana Trench in meters and divide it by 100.",
+    "trace": "Thought: First I search for the depth of the Mariana Trench.\nAction: search[depth of Mariana Trench in meters]\nObservation: The Mariana Trench is 10935 meters deep.\nThought: Now I divide 10935 by 100.\nAction: calculator[10935 / 100]\nObservation: 109.35\nThought: I now know the answer.\nFinal Answer: The depth of the Mariana Trench divided by 100 is 109.35.",
+    "n_actions": 2
+  },
+  {
+    "task": "Find the freezing point of water in Fahrenheit and multiply it by 4.",
+    "trace": "Thought: First I search for the freezing point of water in Fahrenheit.\nAction: search[freezing point of water in Fahrenheit]\nObservation: The freezing point of water is 32 degrees Fahrenheit.\nThought: Now I multiply 32 by 4.\nAction: calculator[32 * 4]\nObservation: 128\nThought: I now know the answer.\nFinal Answer: The freezing point of water in Fahrenheit multiplied by 4 is 128.",
+    "n_actions": 2
+  },
+  {
+    "task": "What is 777 plus 223? Do not guess, verify it.",
+    "trace": "Thought: This is arithmetic, so the correct tool is the calculator, not search.\nAction: calculator[777 + 223]\nObservation: 1000\nThought: I now know the answer.\nFinal Answer: 777 plus 223 is 1000.",
+    "n_actions": 1
+  },
+  {
+    "task": "Who is the current CEO of Google?",
+    "trace": "Thought: This is a factual lookup, so the correct tool is search, not calculator.\nAction: search[current CEO of Google]\nObservation: The CEO of Google is Sundar Pichai.\nThought: I now know the answer.\nFinal Answer: The current CEO of Google is Sundar Pichai.",
+    "n_actions": 1
+  },
+  {
+    "task": "Compute the cube of 6.",
+    "trace": "Thought: Cubing a number is math, so I use the calculator.\nAction: calculator[6 ** 3]\nObservation: 216\nThought: I now know the answer.\nFinal Answer: The cube of 6 is 216.",
+    "n_actions": 1
+  },
+  {
+    "task": "First find the capital of Australia, then find its population.",
+    "trace": "Thought: Step one: find the capital of Australia.\nAction: search[capital of Australia]\nObservation: The capital of Australia is Canberra.\nThought: Step two: find the population of Canberra.\nAction: search[population of Canberra]\nObservation: The population of Canberra is 0.45 million.\nThought: I now know the answer.\nFinal Answer: The capital of Australia is Canberra and its population is 0.45 million.",
+    "n_actions": 2
+  },
+  {
+    "task": "Calculate 30 times 6, then subtract 80 from the result.",
+    "trace": "Thought: Step one: compute 30 times 6.\nAction: calculator[30 * 6]\nObservation: 180\nThought: Step two: subtract 80 from 180.\nAction: calculator[180 - 80]\nObservation: 100\nThought: I now know the answer.\nFinal Answer: 30 times 6 minus 80 is 100.",
+    "n_actions": 2
+  }
+]

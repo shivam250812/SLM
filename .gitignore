@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+checkpoints/
+results/meta_*.json
+analysis/stats_output.md
+.ipynb_checkpoints/
+wandb/
+.DS_Store

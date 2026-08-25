@@ -1,0 +1,642 @@
+% =============================================================================
+% NeurIPS 2026 — ANONYMIZED SUBMISSION
+%
+% REQUIRED: place the official neurips_2026.sty next to this file.
+%   Download the author kit from
+%   https://neurips.cc/Conferences/2026/CallForPapers
+%   (or open the official Overleaf template and export the source).
+%   Do NOT use any third-party reconstruction of the style file.
+%
+% The DEFAULT option is the anonymous double-blind submission mode.
+% Do not pass [preprint] or [final] for review copies.
+%
+% BEFORE SUBMITTING:
+%   1. Replace ANONYMIZED-REPO-URL with an anonymous.4open.science link
+%   2. Confirm the workshop's page limit (main track is 9 content pages;
+%      references, checklist, and appendices do not count)
+%   3. Compile and read the PDF for any identifying string
+% =============================================================================
+\documentclass{article}
+
+\PassOptionsToPackage{numbers,sort&compress}{natbib}
+
+% Workshop submission, double-blind. The style file provides dedicated
+% workshop options; the bare default is the MAIN TRACK, not a workshop.
+%   [dblblindworkshop] -> anonymous (use this unless told otherwise)
+%   [sglblindworkshop] -> NOT anonymous; only if the workshop is single-blind
+\usepackage[dblblindworkshop]{neurips_2026}
+\workshoptitle{SLM-Agents: 1st NeurIPS Workshop on SLMs for Agentic Systems}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{multirow}
+\usepackage{xcolor}        % required by the checklist answer macros
+\usepackage{caption}
+\captionsetup{font=small}
+
+\title{Quantized Small Language Models as Tool-Using Agents:\\
+Memory Savings for Free, Fine-Tuning with Care}
+
+% Anonymous for review. The style file suppresses author details in the
+% default (submission) mode; the block below is the template's standard form.
+\author{%
+  Anonymous Author(s)\\
+  Affiliation\\
+  Address\\
+  \texttt{email}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Agentic AI systems typically rely on large language models whose memory
+footprint prevents deployment on constrained hardware. We present a
+systematic empirical study of whether a \emph{small} language model
+(Phi-3-mini, 3.8B parameters) remains a capable tool-using agent under
+NF4 4-bit quantization, and whether lightweight QLoRA fine-tuning on
+generic agent demonstrations helps or hurts. Using a single unified ReAct
+evaluation harness across three benchmarks---a 50-task diagnostic agentic
+suite, GSM8K with a calculator tool, and HotpotQA (distractor) with a
+search tool---we find that INT4 quantization is essentially free for
+agentic capability. On the diagnostic suite the FP16 and INT4 agents
+succeed and fail on \emph{exactly the same tasks} (zero discordant pairs,
+$n{=}50$); on the standard benchmarks paired McNemar tests find no
+significant difference ($p{=}0.58$ on GSM8K, $p{=}0.63$ on HotpotQA),
+with weight memory falling from 7.64\,GB to 2.21\,GB (71\%). We document
+two deployment-relevant caveats. First, on a T4, INT4 inference is
+roughly $2\times$ \emph{slower} than FP16 because dequantization
+overhead dominates at batch size one, so quantization buys memory, not
+speed, on commodity accelerators. Second, QLoRA fine-tuning on 15 short
+generic ReAct demonstrations (0.25\% of parameters, under two minutes of
+training) leaves diagnostic-suite accuracy unchanged but degrades
+performance on the standard benchmarks (pooled McNemar $p{=}0.041$),
+concentrated on multi-hop question answering. Trace analysis identifies the
+mechanism unambiguously: the fine-tuned agent issues a second search on 10
+of 100 questions where the base INT4 agent issues one on 39 (Wilcoxon
+signed-rank $p{<}10^{-5}$), and second searches are precisely the ones that
+pay off. Our results
+suggest quantized SLM agents are viable for deployment, but that naive
+behavioral fine-tuning on short traces can silently truncate exploratory
+behavior in a way that per-benchmark accuracy alone does not reveal.
+Code, evaluation harness, per-task traces, and all raw results are
+released.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Agentic AI systems---language models that decompose tasks, invoke external
+tools, and act over multiple steps---have advanced rapidly, but almost
+exclusively on top of large proprietary models. This creates a deployment
+gap: the settings where autonomous agents are most valuable (on-device
+assistants, on-premise enterprise automation, low-cost cloud inference)
+are precisely those where serving a 70B+ parameter model is infeasible.
+Recent position work argues that small language models (SLMs) are the
+natural substrate for agentic AI~\cite{belcak2025slm}, since agent
+workloads are dominated by narrow, repetitive tool-calling rather than
+open-ended generation.
+
+Two efficiency levers make SLM agents plausible: post-training
+quantization~\cite{dettmers2023qlora,dettmers2022llmint8}, which shrinks
+memory at some risk to capability, and parameter-efficient fine-tuning
+(PEFT)~\cite{hu2022lora,dettmers2023qlora}, which can specialize behavior
+at negligible cost. What is missing is a careful account of how these
+levers interact with \emph{agentic} behavior specifically: multi-step
+reasoning, tool selection, and iterative search are plausibly more
+fragile under quantization than single-turn generation, and behavioral
+fine-tuning may have out-of-distribution side effects that single-metric
+evaluations miss.
+
+This paper contributes such an account for one representative open SLM,
+Phi-3-mini (3.8B)~\cite{abdin2024phi3}, evaluated end-to-end as a ReAct
+agent~\cite{yao2023react} on free commodity hardware (a single NVIDIA
+T4). We ask three questions. \textbf{(Q1)} How much agentic capability
+is lost at INT4 precision? \textbf{(Q2)} What are the true latency and
+memory trade-offs on commodity GPUs? \textbf{(Q3)} Does lightweight QLoRA
+fine-tuning on a handful of generic agent demonstrations improve agentic
+behavior, and does any change transfer to standard benchmarks?
+
+Because every configuration runs the same task list in the same order
+under a single harness, our results are \emph{paired}. We therefore use
+McNemar's exact test for accuracy and Wilcoxon signed-rank for tool-call
+depth throughout, which is substantially more informative at $n{=}100$
+than comparing independent proportions. Our findings:
+
+\begin{enumerate}
+  \item \textbf{INT4 quantization is essentially free for agentic
+  capability.} On the diagnostic suite, FP16 and INT4 produce
+  \emph{identical} per-task outcomes---zero discordant pairs across 50
+  tasks. On GSM8K and HotpotQA, paired tests find no significant
+  difference ($p{=}0.58$, $p{=}0.63$), and the paired confidence
+  intervals bound any INT4 penalty at roughly 11 accuracy points.
+  Weight memory falls 71\% (7.64\,GB\,$\rightarrow$\,2.21\,GB) (Q1).
+  \item \textbf{Quantization buys memory, not speed, on commodity
+  hardware.} End-to-end task latency at INT4 is roughly $2\times$ FP16
+  on a T4 (6.96\,s vs.\ 3.59\,s per task on our diagnostic suite),
+  because dequantization overhead dominates when compute, not memory
+  bandwidth, is the bottleneck (Q2).
+  \item \textbf{Fine-tune with care: short generic traces suppress
+  follow-up search.} QLoRA on 15 short ReAct demonstrations leaves
+  diagnostic-suite accuracy unchanged (98.0\%) but degrades the standard
+  benchmarks (pooled McNemar $p{=}0.041$), with the effect concentrated
+  on HotpotQA. The behavioral signal is far stronger than the accuracy
+  signal: mean executed searches per question fall from 1.48 to 1.13, and
+  the proportion of questions receiving a second search collapses from 39\%
+  to 10\% (Wilcoxon signed-rank $p{=}8.8\times10^{-6}$, rank-biserial
+  $r{=}0.83$) (Q3).
+\end{enumerate}
+
+We view the third finding---a well-diagnosed negative result---as the
+most actionable: it identifies a concrete failure mode that any
+practitioner fine-tuning small agent models on demonstration traces
+should measure, and that per-benchmark accuracy alone does not reveal.
+
+\section{Related Work}
+
+\paragraph{Small language models.}
+Capable sub-10B models---Phi-3~\cite{abdin2024phi3},
+Gemma~\cite{gemma2024}, Mistral-7B~\cite{jiang2023mistral},
+Qwen2~\cite{yang2024qwen2}---have narrowed the gap to much larger models,
+and surveys~\cite{wan2024efficient,lu2024slmsurvey} catalogue the design
+space. \citet{belcak2025slm} argue that SLMs will dominate agentic
+deployments; \citet{srivastava2026effgen} build a framework enabling SLMs as
+autonomous agents. Our work is complementary: rather than proposing a
+framework, we measure how the two standard efficiency levers affect agentic
+behavior under a minimal scaffold.
+
+\paragraph{Quantization and parameter-efficient fine-tuning.}
+Post-training quantization to 8-bit~\cite{dettmers2022llmint8} and
+4-bit~\cite{frantar2023gptq,dettmers2023qlora} preserves perplexity and
+single-turn accuracy remarkably well, and LoRA~\cite{hu2022lora} and
+QLoRA~\cite{dettmers2023qlora} enable fine-tuning with a fraction of a
+percent of trainable parameters; distillation offers a complementary
+route~\cite{gu2024minillm}. Most quantization evaluations measure static
+benchmarks; we measure closed-loop agent behavior, where errors compound
+across steps and the number of tool invocations is itself an outcome.
+
+\paragraph{Language agents and benchmarks.}
+ReAct~\cite{yao2023react} interleaves reasoning traces with tool calls
+and remains the canonical minimal agent scaffold;
+Toolformer~\cite{schick2023toolformer} showed models can learn API use
+self-supervised. Agent benchmarks such as AgentBench~\cite{liu2024agentbench},
+ALFWorld~\cite{shridhar2021alfworld} and WebArena~\cite{zhou2024webarena}
+target large models and heavy environments, and are poorly matched to 3.8B
+models on free hardware where format compliance dominates the score. We
+therefore combine a controlled diagnostic suite with
+GSM8K~\cite{cobbe2021gsm8k} (calculator tool) and
+HotpotQA~\cite{yang2018hotpotqa} in the distractor setting (search tool).
+
+\section{Method}
+\label{sec:method}
+
+\subsection{Agent architecture}
+We implement a minimal ReAct agent. The model receives a system prompt
+specifying the available tools and the
+\texttt{Thought}/\texttt{Action}/\texttt{Observation} format, and
+generates greedily (temperature 0, \texttt{do\_sample=False}). A stopping
+criterion halts generation whenever the model emits
+\texttt{Observation:}; the named tool is then \emph{actually executed},
+its real output is injected into the context, and generation resumes.
+This guarantees observations are never hallucinated. The loop ends when
+the model emits \texttt{Final Answer:} or a step budget is reached (6
+steps; 8 for GSM8K). Two implementation details proved necessary for
+small models: (i) a minimum-new-tokens guard (20 tokens) before the
+stopping criterion is armed, preventing spurious first-token stops, and
+(ii) trace trimming that truncates generation drift (e.g., fabricated
+follow-up questions) at known markers.
+
+If no \texttt{Final Answer:} span is produced, the answer field falls
+back to the last line of the trace. We audited this fallback across all
+750 agent runs: 21 answers fell back to observation text, and none of
+them scored correct, so the fallback does not inflate any reported
+accuracy.
+
+\subsection{Tools}
+\texttt{calculator[expr]} evaluates sanitized arithmetic expressions
+(rejecting any input outside a numeric-and-operator character class).
+\texttt{search[query]} retrieves from a benchmark-specific source: a
+fixed 27-entry fact base for the diagnostic suite, and, for HotpotQA, the
+10 paragraphs (2 gold, 8 distractors) provided with each question, ranked by
+title-weighted lexical overlap, returning the single highest-scoring
+paragraph truncated to 600 characters. Because only one paragraph is
+returned per call, any question requiring both gold paragraphs
+necessarily requires at least two search calls---a fact we rely on in
+Section~\ref{sec:q3}.
+
+\subsection{Benchmarks}
+\label{sec:benchmarks}
+\textbf{Custom-50 (diagnostic).} 50 tasks in five categories of 10:
+\emph{single\_lookup}, \emph{arithmetic}, \emph{multi\_step} (search then
+calculate), \emph{tool\_selection} (must choose the correct tool), and
+\emph{sequential} (explicit multi-action instructions). Scoring is
+substring match of the expected value in the final answer. This suite is
+a \emph{format-compliance and tool-routing check}, not a capability
+measure: all configurations saturate it (Section~\ref{sec:q1}), so it
+discriminates only in the sense of confirming that the agent loop
+functions identically across precisions.
+\textbf{GSM8K.} 100 problems sampled (seed 42) from the test split;
+calculator tool only; one worked example in the system prompt; scoring is
+exact numeric match against the gold answer.
+\textbf{HotpotQA (distractor).} 100 validation questions with span
+answers (yes/no questions excluded to keep inclusion-match scoring
+unambiguous), sampled with seed 42; scoring is normalized-answer
+inclusion (lowercasing, punctuation and article removal).
+
+\subsection{Configurations}
+\label{sec:configs}
+\textbf{FP16}: the unmodified model in half precision (7.64\,GB weight
+memory).
+\textbf{INT4}: NF4 double quantization via
+bitsandbytes~\cite{dettmers2023qlora} with FP16 compute (2.21\,GB).
+\textbf{INT4+QLoRA}: the INT4 model with LoRA adapters ($r{=}16$,
+$\alpha{=}32$) on the attention projections (\texttt{qkv\_proj},
+\texttt{o\_proj}), 9{,}437{,}184 trainable parameters (0.2464\%), trained
+for 8 epochs at learning rate $2\times10^{-4}$ (cosine schedule, warmup
+ratio 0.1, effective batch size 4, paged 8-bit AdamW) on \textbf{15
+hand-written generic ReAct demonstrations} covering the five task
+patterns. The demonstrations average 1.60 tool calls each and are fully
+disjoint from all evaluation tasks in entities, numbers, and wording;
+\emph{no GSM8K or HotpotQA data is used}. Training takes 1.8 minutes on a
+single T4.
+All runs use one T4 GPU, greedy decoding, seed 42, and identical harness
+code; the only variable is the model configuration. Environment:
+transformers 4.41.2, torch 2.10.0+cu128, datasets 2.19.1, peft 0.11.1,
+trl 0.8.6, accelerate 0.30.1, CUDA 12.8, Python 3.12, NVIDIA Tesla T4.
+The bitsandbytes version for the replication and trace-depth analysis of
+Section~\ref{sec:replication} is 0.50.1; for the original evaluation round
+reported in Table~\ref{tab:standard} it was
+installed as \texttt{>=0.46.1} and the resolved version was not recorded.
+Given our own findings in Section~\ref{sec:repro} we flag this as a gap
+rather than omit it; Section~\ref{sec:replication} quantifies how much it
+matters in practice.
+
+\section{Results}
+
+\subsection{Q1: Quantization is essentially free for agentic capability}
+\label{sec:q1}
+
+On the diagnostic suite all three configurations score 98.0\% (49/50), with
+the single failure in \emph{multi\_step} and every other category at 100\%.
+The paired view is stronger than the aggregate: FP16 and INT4 have
+\textbf{zero discordant pairs}---they succeed and fail on exactly the same 50
+tasks. This is an equivalence result on this suite, not merely an undetected
+difference. Mean latency is 3.59\,s (FP16), 6.96\,s (INT4) and 7.37\,s
+(INT4+QLoRA).
+
+Table~\ref{tab:standard} shows the standard benchmarks. INT4 loses 3
+points on GSM8K (71\%$\rightarrow$68\%) and 3 points on HotpotQA
+(47\%$\rightarrow$44\%). Paired McNemar tests find no significant
+difference in either case (GSM8K: 8 vs.\ 5 discordant, $p{=}0.58$;
+HotpotQA: 10 vs.\ 7 discordant, $p{=}0.63$). We state the result as a
+bound rather than a null: the paired 95\% confidence intervals are
+$[-4.3, +10.8]$ on GSM8K and $[-5.1, +11.1]$ on HotpotQA, so our design
+rules out an INT4 penalty larger than roughly 11 points but cannot
+resolve differences below that. Within that bound, quantization costs
+nothing measurable while removing 71\% of weight memory.
+
+\begin{table}[t]
+\centering
+\caption{Standard benchmarks (100 tasks each, seed 42). The agent is
+\emph{not} fine-tuned on either dataset. Tool calls are the mean number
+of executed tool invocations per task. $p$-values are exact McNemar
+against the INT4 row within the same benchmark.}
+\label{tab:standard}
+\small
+\begin{tabular}{llcccc}
+\toprule
+Benchmark & Config & Accuracy (\%) & Latency (s) & Tool calls & $p$ vs.\ INT4 \\
+\midrule
+\multirow{3}{*}{GSM8K}
+ & FP16        & \textbf{71.0} & \textbf{7.32} & 3.38 & 0.581 \\
+ & INT4        & 68.0          & 12.31         & 3.22 & --- \\
+ & INT4+QLoRA  & 65.0          & 14.31         & 3.25 & 0.388 \\
+\midrule
+\multirow{3}{*}{HotpotQA (distractor)}
+ & FP16        & \textbf{47.0} & \textbf{5.46} & 1.65 & 0.629 \\
+ & INT4        & 44.0          & 9.03          & 1.47 & --- \\
+ & INT4+QLoRA  & 38.0          & 7.30          & \textbf{1.13} & 0.070 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Q2: On a T4, quantization buys memory, not speed}
+
+Across every benchmark, FP16 is the fastest configuration---roughly
+$2\times$ faster than INT4 per task---despite INT4's smaller weights. On a T4, NF4
+weights must be dequantized to FP16 for every matrix multiplication, and
+this overhead dominates at batch size 1, where the GPU is not
+memory-bandwidth bound. The T4 is a Turing-generation accelerator with no
+native low-precision matmul path for NF4; this result is a property of
+that hardware class and should not be read as a general claim about
+quantized inference.
+
+The practical implication is a deployment decision rule: choose INT4 when
+the constraint is \emph{fitting} the model (edge devices, multi-tenant
+serving, freeing VRAM for context), and FP16 when the constraint is
+\emph{latency} and the model already fits. Reported speedups from
+quantization on server-class GPUs with fused low-bit kernels do not
+automatically transfer to commodity accelerators, and end-to-end agent
+latency---which compounds per-step generation over multiple tool
+calls---amplifies the difference.
+
+We report weight memory (7.64\,GB vs.\ 2.21\,GB) as measured by
+\texttt{get\_memory\_footprint()}. This excludes activations and the KV
+cache; peak allocated memory during evaluation is the quantity that
+determines whether a model fits on a given device, and our harness now
+records it alongside every run.
+
+\subsection{Q3: Generic-trace QLoRA suppresses follow-up search}
+\label{sec:q3}
+
+QLoRA fine-tuning leaves the diagnostic suite unchanged (98.0\%). On the
+standard benchmarks it costs 3 points on GSM8K and 6 points on HotpotQA.
+Neither benchmark alone reaches significance (GSM8K $p{=}0.39$; HotpotQA
+$p{=}0.070$), but the effect is directionally consistent across both, and
+pooling the discordant pairs over the two benchmarks gives 15 vs.\ 5,
+exact McNemar $p{=}0.041$. The accuracy evidence is therefore suggestive
+but underpowered at $n{=}100$, and we do not rest the claim on it.
+
+The decisive evidence is behavioral. Table~\ref{tab:depth} gives the
+distribution of executed tool calls per HotpotQA question. The base INT4
+agent issues a second search on 39 of 100 questions; after fine-tuning it
+does so on 10. Across the 100 paired questions the fine-tuned agent used
+fewer calls on 30 and more on 2 (paired Wilcoxon signed-rank
+$W{=}44$, $p{=}8.8\times10^{-6}$, rank-biserial $r{=}0.83$).
+
+\begin{table}[t]
+\centering
+\caption{Distribution of executed tool calls per HotpotQA question
+(replication run, $n{=}100$ paired). Our search tool returns one paragraph
+per call, so any question needing both gold paragraphs requires at least two
+calls. Fine-tuning removes three quarters of the second searches.}
+\label{tab:depth}
+\small
+\begin{tabular}{lccccc}
+\toprule
+Config & 0 calls & 1 call & 2 calls & 3+ calls & $\ge$2 calls \\
+\midrule
+INT4          & 1 & 60 & 35 & 4 & \textbf{39} \\
+INT4+QLoRA    & 1 & 89 &  9 & 1 & \textbf{10} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Second searches are not idle. In both configurations, questions that
+received at least two calls scored substantially higher than those that
+received one (INT4: 51.3\% vs.\ 37.7\%; INT4+QLoRA: 60.0\% vs.\ 35.6\%).
+Fine-tuning therefore suppresses precisely the behavior that carries the
+multi-hop questions. Consistent with this, fine-tuned HotpotQA latency
+\emph{drops} (8.24\,s $\rightarrow$ 6.51\,s): the agent is faster because
+it gives up earlier.
+
+Two observations constrain the mechanism, and we state them because they
+rule out the simplest explanation. First, our 15 demonstrations average
+1.60 tool calls, so the fine-tuned model at 1.13 has gone \emph{below}
+the training distribution rather than converging to it. Second, on GSM8K
+mean tool calls did not fall at all (3.22 $\rightarrow$ 3.25). The effect
+is therefore not a global shortening of trace length, which would have
+affected both benchmarks. What the demonstrations have in common is that
+every search they contain returns a directly usable fact; none models
+recovering from an unhelpful observation. We interpret the effect as a
+reduced propensity to issue a \emph{follow-up} search after an
+observation that does not already contain the answer---a search-specific
+behavior---rather than a learned length prior.
+
+We term this failure mode \textbf{search-horizon truncation}. It is
+invisible to in-domain evaluation (where one or two calls suffice), and at
+$n{=}100$ it is not reliably detectable from accuracy alone: the same
+intervention that moves accuracy by an amount indistinguishable from noise
+moves trace depth by five orders of magnitude in $p$. This asymmetry is the
+practical lesson. We recommend that agent fine-tuning reports include
+tool-call distributions, not merely means, alongside accuracy.
+
+\paragraph{Ablation: do longer demonstrations repair it?}
+We expect that mixing longer multi-hop demonstrations into the training set
+repairs the effect, since the demonstrations currently contain no example of
+recovering from an unhelpful observation. We leave this to future work.
+
+\subsection{Replication under a different quantization kernel}
+\label{sec:replication}
+
+The HotpotQA INT4 and INT4+QLoRA configurations were re-run in a fresh
+session, in separate processes, under bitsandbytes 0.50.1---a different
+kernel version from the original round. Accuracy reproduced to within one
+task (INT4 44\%$\rightarrow$43\%; INT4+QLoRA 38\%$\rightarrow$38\%) and mean
+tool calls reproduced to two decimal places (1.47$\rightarrow$1.48;
+1.13$\rightarrow$1.13). The trace-depth analysis above uses this replication
+run, for which per-task tool-call counts and full agent traces are released.
+
+This is a useful counterweight to Section~\ref{sec:repro}: between two recent
+bitsandbytes releases under a fixed harness the agent's behavior is stable, so
+the variance we observed earlier is attributable to the harness and kernel
+changing together rather than to quantization kernels being inherently
+unstable. We also record peak allocated memory during evaluation: 3.77\,GB for
+INT4 against 2.21\,GB of weights---the gap is activations and KV cache, and it
+is the peak figure that determines whether a deployment target fits.
+
+\subsection{Reproducibility: quantized-agent scores are environment-sensitive}
+\label{sec:repro}
+
+In an earlier evaluation round conducted with an older bitsandbytes
+kernel and a slightly different harness, the identical INT4 model scored
+92\% on a 25-task subset of our diagnostic suite (multi\_step: 60\%),
+and QLoRA appeared to ``recover'' accuracy to 96\%. After unifying the
+harness and upgrading the quantization library, base INT4 scores 98\%
+and the recovery effect disappears. We report this deliberately: small
+quantized models operate close to capability thresholds on multi-step
+tasks, so kernel-level numerical differences can move headline agentic
+scores by several points. Pinned library versions and a single shared
+harness across all configurations are therefore not optional hygiene but
+a validity requirement for quantized-agent research.
+
+\section{Limitations}
+\label{sec:limitations}
+
+Our study covers one model family (Phi-3-mini), one quantization method
+(bitsandbytes NF4) and one hardware target (T4); we test no INT8 intermediate
+point and no alternative scheme such as GPTQ~\cite{frantar2023gptq} or AWQ,
+and the latency conclusions in particular will differ on GPUs with fused
+low-bit kernels. The diagnostic suite is small (50 tasks), uses a closed
+27-entry fact base and is saturated by every configuration, so it functions as
+a format-compliance check rather than a capability measurement; differences of
+$\le$3 points on the 100-task benchmarks are within our resolution, and
+HotpotQA inclusion match on span answers is more permissive than exact match.
+
+The FP16 configuration was evaluated in a separate cloud session from the INT4
+configurations. Accuracy comparisons are unaffected---decoding is greedy and
+the harness byte-identical---but the latency comparison is not concurrent and
+shared-tenancy GPUs vary with host load.
+
+The QLoRA study uses a single minimal demonstration set (15 traces) and a
+single training seed; we show that this regime suppresses follow-up search,
+not that QLoRA cannot help agents trained on longer or task-matched traces.
+Our INT4 and INT4+QLoRA configurations also differ by the dtype changes that
+\texttt{prepare\_model\_for\_kbit\_training} introduces (layer norms and the LM
+head are upcast to fp32) as well as by the adapters. We report no zero-adapter
+control, so attribution to the trained weights rests on the tool-call
+mechanism rather than an isolated ablation; our released harness implements
+this control. Finally, the scaffold is intentionally minimal (ReAct, greedy
+decoding, two tools) and results may differ under richer scaffolds with
+reflection or planning.
+
+\section{Broader impacts}
+\label{sec:impacts}
+
+Reducing the memory cost of capable tool-using agents supports on-device and
+on-premise deployment, where data need not leave the user's hardware, and
+lowers the cost of agentic inference; the same accessibility is dual-use,
+since cheaper agents are also cheaper to run at scale for unwanted automation.
+Our negative result is itself safety-relevant: we document a cheap fine-tuning
+regime that leaves headline accuracy close to unchanged while measurably
+suppressing an agent's willingness to gather evidence before answering. An
+agent that stops searching early is not obviously broken from the outside; it
+answers more confidently on less information. Practitioners adapting small
+agents on demonstration data should measure tool-call depth, not accuracy
+alone.
+
+\section{Conclusion}
+
+A 3.8B-parameter model quantized to 4 bits retains essentially all of its
+tool-using agentic capability---identical per-task outcomes on our diagnostic
+suite, no statistically detectable difference on two standard
+benchmarks---at 29\% of the weight memory. Two caveats qualify the picture:
+on commodity GPUs quantization trades latency for memory rather than improving
+both, and lightweight fine-tuning on short demonstration traces can silently
+suppress follow-up tool use, degrading exactly the multi-hop behavior agents
+exist to perform. Measuring trace depth, pinning the numerical environment and using paired
+tests should be standard practice for efficient-agent research.
+
+\paragraph{Reproducibility.} Code, harness, demonstrations, per-task CSVs and
+the analysis script are anonymized at \url{ANONYMIZED-REPO-URL}.
+% TODO(anonymous): paste an anonymous.4open.science link. Do NOT paste a
+% GitHub URL containing your username, and check the mirrored notebooks for
+% identifying strings (account names, home paths) before publishing it.
+
+
+
+\bibliographystyle{plainnat}
+\begin{thebibliography}{Srivastava et~al.(2026)}
+
+\bibitem[Belcak and Heinrich(2025)]{belcak2025slm}
+P.~Belcak and G.~Heinrich.
+\newblock Small language models are the future of agentic {AI}.
+\newblock \emph{arXiv preprint arXiv:2506.02153}, 2025.
+
+\bibitem[Srivastava et~al.(2026)]{srivastava2026effgen}
+G.~Srivastava, A.~Hussain, C.~Wang, Y.~C. Lin, and X.~Wang.
+\newblock {EffGen}: Enabling small language models as capable autonomous
+  agents.
+\newblock In \emph{ICML}, 2026. arXiv:2602.00887.
+
+\bibitem{abdin2024phi3}
+M.~Abdin et~al.
+\newblock Phi-3 technical report: A highly capable language model locally
+  on your phone.
+\newblock \emph{arXiv preprint arXiv:2404.14219}, 2024.
+
+\bibitem{yao2023react}
+S.~Yao, J.~Zhao, D.~Yu, N.~Du, I.~Shafran, K.~Narasimhan, and Y.~Cao.
+\newblock {ReAct}: Synergizing reasoning and acting in language models.
+\newblock In \emph{ICLR}, 2023.
+
+\bibitem{dettmers2023qlora}
+T.~Dettmers, A.~Pagnoni, A.~Holtzman, and L.~Zettlemoyer.
+\newblock {QLoRA}: Efficient finetuning of quantized {LLM}s.
+\newblock In \emph{NeurIPS}, 2023.
+
+\bibitem{hu2022lora}
+E.~J. Hu, Y.~Shen, P.~Wallis, Z.~Allen-Zhu, Y.~Li, S.~Wang, L.~Wang, and
+  W.~Chen.
+\newblock {LoRA}: Low-rank adaptation of large language models.
+\newblock In \emph{ICLR}, 2022.
+
+\bibitem{dettmers2022llmint8}
+T.~Dettmers, M.~Lewis, Y.~Belkada, and L.~Zettlemoyer.
+\newblock {LLM.int8()}: 8-bit matrix multiplication for transformers at
+  scale.
+\newblock In \emph{NeurIPS}, 2022.
+
+\bibitem{frantar2023gptq}
+E.~Frantar, S.~Ashkboos, T.~Hoefler, and D.~Alistarh.
+\newblock {GPTQ}: Accurate post-training quantization for generative
+  pre-trained transformers.
+\newblock In \emph{ICLR}, 2023.
+
+\bibitem{gu2024minillm}
+Y.~Gu, L.~Dong, F.~Wei, and M.~Huang.
+\newblock {MiniLLM}: Knowledge distillation of large language models.
+\newblock In \emph{ICLR}, 2024.
+
+\bibitem{schick2023toolformer}
+T.~Schick, J.~Dwivedi-Yu, R.~Dess{\`i}, R.~Raileanu, M.~Lomeli,
+  L.~Zettlemoyer, N.~Cancedda, and T.~Scialom.
+\newblock Toolformer: Language models can teach themselves to use tools.
+\newblock In \emph{NeurIPS}, 2023.
+
+\bibitem{liu2024agentbench}
+X.~Liu et~al.
+\newblock {AgentBench}: Evaluating {LLM}s as agents.
+\newblock In \emph{ICLR}, 2024.
+
+\bibitem{shridhar2021alfworld}
+M.~Shridhar, X.~Yuan, M.-A. C{\^o}t{\'e}, Y.~Bisk, A.~Trischler, and
+  M.~Hausknecht.
+\newblock {ALFWorld}: Aligning text and embodied environments for
+  interactive learning.
+\newblock In \emph{ICLR}, 2021.
+
+\bibitem{zhou2024webarena}
+S.~Zhou et~al.
+\newblock {WebArena}: A realistic web environment for building autonomous
+  agents.
+\newblock In \emph{ICLR}, 2024.
+
+\bibitem{cobbe2021gsm8k}
+K.~Cobbe et~al.
+\newblock Training verifiers to solve math word problems.
+\newblock \emph{arXiv preprint arXiv:2110.14168}, 2021.
+
+\bibitem{yang2018hotpotqa}
+Z.~Yang, P.~Qi, S.~Zhang, Y.~Bengio, W.~W. Cohen, R.~Salakhutdinov, and
+  C.~D. Manning.
+\newblock {HotpotQA}: A dataset for diverse, explainable multi-hop
+  question answering.
+\newblock In \emph{EMNLP}, 2018.
+
+\bibitem{gemma2024}
+Gemma Team.
+\newblock Gemma: Open models based on {Gemini} research and technology.
+\newblock \emph{arXiv preprint arXiv:2403.08295}, 2024.
+
+\bibitem{jiang2023mistral}
+A.~Q. Jiang et~al.
+\newblock Mistral 7{B}.
+\newblock \emph{arXiv preprint arXiv:2310.06825}, 2023.
+
+\bibitem{yang2024qwen2}
+A.~Yang et~al.
+\newblock Qwen2 technical report.
+\newblock \emph{arXiv preprint arXiv:2407.10671}, 2024.
+
+\bibitem{wan2024efficient}
+Z.~Wan et~al.
+\newblock Efficient large language models: A survey.
+\newblock \emph{Transactions on Machine Learning Research}, 2024.
+
+\bibitem{lu2024slmsurvey}
+Z.~Lu et~al.
+\newblock Small language models: Survey, measurements, and insights.
+\newblock \emph{arXiv preprint arXiv:2409.15790}, 2024.
+
+\end{thebibliography}
+
+\newpage
+\input{checklist}
+
+\end{document}

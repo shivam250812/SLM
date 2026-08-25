@@ -1,0 +1,18 @@
+# Exact versions used for the results reported in the paper.
+# Recorded from the evaluation session: torch 2.10.0+cu128, CUDA 12.8,
+# NVIDIA Tesla T4, Python 3.12.
+transformers==4.41.2
+accelerate==0.30.1
+datasets==2.19.1
+peft==0.11.1
+trl==0.8.6
+pandas
+scipy
+
+# NOTE: bitsandbytes was installed as ">=0.46.1" and the resolved version was
+# not captured in the original session. Because the paper argues that
+# kernel-level numerical differences move agentic scores by several points,
+# this is a real reproducibility gap. Re-run scripts/pin_versions.sh in your
+# environment and replace the line below with the exact resolved version
+# before release.
+bitsandbytes>=0.46.1
